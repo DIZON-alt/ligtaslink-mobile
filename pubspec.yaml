@@ -1,0 +1,36 @@
+name: ligtaslink
+description: "LigtasLink - Connecting Help, Saving Lives."
+publish_to: 'none'
+
+version: 1.1.0+2
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Firebase
+  firebase_core: ^4.15.0
+  firebase_auth: ^6.7.0
+
+  # Existing packages
+  crypto: ^3.0.3
+  cupertino_icons: ^1.0.8
+  shared_preferences: ^2.2.3
+  http: ^1.2.2
+  cloud_firestore: ^6.10.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/logo_ligtaslink.jpg
+    - assets/services.json

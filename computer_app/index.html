@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#c62828">
+  <title>LigtasLink</title>
+  <link rel="icon" href="assets/logo_ligtaslink.jpg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main id="authView" class="page-shell">
+    <section class="auth-column" aria-labelledby="appTitle">
+      <header class="brand">
+        <div class="logo-ring"><img src="assets/logo_ligtaslink.jpg" alt="LigtasLink logo"></div>
+        <h1 id="appTitle">LIGTASLINK</h1>
+        <p>Connecting Help, Saving Lives.</p>
+      </header>
+
+      <form id="loginForm" class="card" novalidate>
+        <h2>Sign in</h2>
+        <p class="muted">Your account is saved on this computer.</p>
+
+        <label for="loginEmail">Email</label>
+        <div class="input-wrap">
+          <span aria-hidden="true">✉</span>
+          <input id="loginEmail" name="email" type="email" autocomplete="email" placeholder="you@example.com" required>
+        </div>
+
+        <label for="loginPassword">Password</label>
+        <div class="input-wrap">
+          <span aria-hidden="true">●</span>
+          <input id="loginPassword" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" minlength="8" required>
+          <button class="show-password" type="button" data-toggle-password="loginPassword" aria-label="Show password">Show</button>
+        </div>
+
+        <div class="right-link"><button id="forgotButton" class="text-button" type="button">Forgot password?</button></div>
+        <p id="loginError" class="form-error" role="alert" hidden></p>
+        <button class="primary-button" type="submit">Sign In</button>
+        <p class="account-link">First time here? <button id="registerButton" class="text-button" type="button">Create account</button></p>
+      </form>
+    </section>
+  </main>
+
+  <main id="homeView" class="dashboard" hidden>
+    <nav class="topbar">
+      <div class="topbar-brand">
+        <img src="assets/logo_ligtaslink.jpg" alt="">
+        <strong>LigtasLink</strong>
+      </div>
+      <button id="signOutButton" class="outline-button" type="button">Sign out</button>
+    </nav>
+    <section class="welcome-panel">
+      <div class="success-icon" aria-hidden="true">✓</div>
+      <h1>Welcome, <span id="userName"></span></h1>
+      <p id="userEmail" class="muted"></p>
+      <div class="status-card">
+        <span class="status-dot" aria-hidden="true"></span>
+        <p>LigtasLink is running correctly on this computer. Your local account is ready.</p>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="registerDialog">
+    <form id="registerForm" class="dialog-form" novalidate>
+      <div class="dialog-heading">
+        <div><h2>Create local account</h2><p class="muted">This account stays on this computer.</p></div>
+        <button class="close-button" type="button" data-close="registerDialog" aria-label="Close">×</button>
+      </div>
+      <label for="registerName">Full name</label>
+      <input id="registerName" type="text" autocomplete="name" minlength="2" required>
+      <label for="registerEmail">Email</label>
+      <input id="registerEmail" type="email" autocomplete="email" required>
+      <label for="registerPassword">Password</label>
+      <input id="registerPassword" type="password" autocomplete="new-password" minlength="8" required>
+      <label for="registerConfirm">Confirm password</label>
+      <input id="registerConfirm" type="password" autocomplete="new-password" minlength="8" required>
+      <label for="registerPin">Recovery PIN</label>
+      <input id="registerPin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" required>
+      <small>Use 4 to 8 digits and remember it.</small>
+      <p id="registerError" class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="outline-button" type="button" data-close="registerDialog">Cancel</button>
+        <button class="primary-button compact" type="submit">Create account</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="resetDialog">
+    <form id="resetForm" class="dialog-form" novalidate>
+      <div class="dialog-heading">
+        <div><h2>Reset password</h2><p class="muted">Enter the recovery PIN you created.</p></div>
+        <button class="close-button" type="button" data-close="resetDialog" aria-label="Close">×</button>
+      </div>
+      <label for="resetEmail">Email</label>
+      <input id="resetEmail" type="email" autocomplete="email" required>
+      <label for="resetPin">Recovery PIN</label>
+      <input id="resetPin" type="password" inputmode="numeric" required>
+      <label for="resetPassword">New password</label>
+      <input id="resetPassword" type="password" autocomplete="new-password" minlength="8" required>
+      <p id="resetError" class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="outline-button" type="button" data-close="resetDialog">Cancel</button>
+        <button class="primary-button compact" type="submit">Save password</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

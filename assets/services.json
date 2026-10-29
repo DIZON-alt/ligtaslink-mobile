@@ -1,0 +1,50 @@
+{
+  "catalog": {
+    "id": "ligtaslink-emergency-services",
+    "title": "Emergency Response Services",
+    "version": 1,
+    "updatedAt": "2026-09-22"
+  },
+  "services": [
+    {
+      "id": "medical-response",
+      "name": "Medical Response",
+      "category": "Health",
+      "description": "Request first-aid guidance or urgent medical assistance from nearby responders.",
+      "availability": "24/7",
+      "responseTime": "5-15 min",
+      "color": "#C62828",
+      "icon": "medical_services"
+    },
+    {
+      "id": "fire-rescue",
+      "name": "Fire Rescue",
+      "category": "Rescue",
+      "description": "Report fire, smoke, or an immediate fire safety hazard to the response network.",
+      "availability": "24/7",
+      "responseTime": "5-10 min",
+      "color": "#E65100",
+      "icon": "local_fire_department"
+    },
+    {
+      "id": "police-assistance",
+      "name": "Police Assistance",
+      "category": "Security",
+      "description": "Request help with threats, public safety incidents, or urgent security concerns.",
+      "availability": "24/7",
+      "responseTime": "10-20 min",
+      "color": "#0D47A1",
+      "icon": "local_police"
+    },
+    {
+      "id": "road-rescue",
+      "name": "Road Rescue",
+      "category": "Transport",
+      "description": "Get help for road hazards, vehicle incidents, and blocked emergency routes.",
+      "availability": "6:00 AM - 10:00 PM",
+      "responseTime": "15-30 min",
+      "color": "#00695C",
+      "icon": "car_crash"
+    }
+  ]
+}
