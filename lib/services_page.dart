@@ -31,7 +31,9 @@ class _ServicesPageState extends State<ServicesPage> {
   }
 
   void _refresh() {
-    setState(() => _servicesFuture = widget.api.fetchServices());
+    setState(() {
+      _servicesFuture = widget.api.fetchServices();
+    });
   }
 
   @override
