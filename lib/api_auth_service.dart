@@ -18,7 +18,8 @@ class RestAuthService implements AuthService {
 
   static Future<RestAuthService> create(String baseUrl) async {
     final preferences = await SharedPreferences.getInstance();
-    return RestAuthService._(baseUrl.replaceFirst(RegExp(r'/$'), ''), preferences);
+    return RestAuthService._(
+        baseUrl.replaceFirst(RegExp(r'/$'), ''), preferences);
   }
 
   @override
@@ -52,7 +53,8 @@ class RestAuthService implements AuthService {
           ? <String, dynamic>{}
           : jsonDecode(response.body) as Map<String, dynamic>;
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        return AuthResult.failure(json['error'] as String? ?? 'The API request failed.');
+        return AuthResult.failure(
+            json['error'] as String? ?? 'The API request failed.');
       }
       final user = _userFromJson(json);
       _currentUser = user;
@@ -98,6 +100,13 @@ class RestAuthService implements AuthService {
       'recoveryPin': recoveryPin,
       'newPassword': newPassword,
     });
+  }
+
+  @override
+  Future<void> deleteAccount({required String password}) {
+    throw UnsupportedError(
+      'Account deletion is not available through the configured REST API.',
+    );
   }
 
   @override

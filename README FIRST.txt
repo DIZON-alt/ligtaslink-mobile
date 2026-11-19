@@ -1,11 +1,19 @@
-LIGTASLINK - WINDOWS QUICK START
+LIGTASLINK - QUICK START
 
-1. Extract the ZIP file first.
-2. Open the ligtaslink folder.
-3. Double-click START LIGTASLINK.bat.
-4. Create your account and remember your recovery PIN.
+To run the app from a terminal:
 
-The app opens in Microsoft Edge or Google Chrome and works without Flutter.
+1. Install Flutter. For Android, also install Android Studio and start an
+   emulator, or connect an Android phone with USB debugging enabled.
+2. Open PowerShell in the folder containing pubspec.yaml.
+3. Run:
 
-If you want to edit the Flutter project, use RUN FLUTTER VERSION.bat.
-See README.md for the complete instructions.
+   flutter pub get
+   flutter devices
+   flutter run -d chrome
+
+To run on an Android device or emulator, use its ID from "flutter devices":
+
+   flutter run -d <device-id>
+
+The Flutter source is the app; do not upload generated .exe files to GitHub.
+See README.md for more setup details.

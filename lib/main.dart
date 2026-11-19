@@ -3,6 +3,7 @@ import 'package:firebase_core/firebase_core.dart';
 
 import 'auth_service.dart';
 import 'api_auth_service.dart';
+import 'firebase_options.dart';
 import 'firebase_auth_service.dart';
 import 'home_page.dart';
 import 'login_page.dart';
@@ -16,9 +17,14 @@ Future<void> main() async {
     auth = await RestAuthService.create(apiBaseUrl);
   } else {
     try {
-      await Firebase.initializeApp();
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
       auth = await FirebaseAuthService.create();
-    } catch (_) {
+    } catch (error, stackTrace) {
+      debugPrint(
+          'Firebase initialization failed; using local authentication: $error');
+      debugPrintStack(stackTrace: stackTrace);
       auth = await LocalAuthService.create();
     }
   }

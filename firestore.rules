@@ -1,0 +1,52 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    match /users/{userId} {
+      allow read, create, update, delete:
+          if signedIn() && request.auth.uid == userId;
+    }
+
+    match /incident_reports/{reportId} {
+      allow create: if signedIn()
+          && request.resource.data.reporterUid == request.auth.uid
+          && request.resource.data.reportId == reportId
+          && request.resource.data.keys().hasOnly([
+            'reportId',
+            'reporterUid',
+            'reporterName',
+            'reporterEmail',
+            'service',
+            'area',
+            'location',
+            'details',
+            'status',
+            'submittedAt'
+          ])
+          && request.resource.data.keys().hasAll([
+            'reportId',
+            'reporterUid',
+            'reporterName',
+            'reporterEmail',
+            'service',
+            'area',
+            'location',
+            'details',
+            'status',
+            'submittedAt'
+          ])
+          && request.resource.data.service is string
+          && request.resource.data.area is string
+          && request.resource.data.location is string
+          && request.resource.data.details is string
+          && request.resource.data.status == 'Pending verification'
+          && request.resource.data.submittedAt == request.time;
+      allow get, list, delete: if signedIn()
+          && resource.data.reporterUid == request.auth.uid;
+      allow update: if false;
+    }
+  }
+}

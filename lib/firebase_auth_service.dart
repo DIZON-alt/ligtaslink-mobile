@@ -1,6 +1,8 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'auth_service.dart';
+import 'profile_api.dart';
 
 class FirebaseAuthService implements AuthService {
   final FirebaseAuth _firebaseAuth;
@@ -61,6 +63,10 @@ class FirebaseAuthService implements AuthService {
         password: password,
       );
       await credential.user?.updateDisplayName(name.trim());
+      await ApiService.saveProfile(
+        name: name.trim(),
+        email: credential.user?.email ?? email.trim().toLowerCase(),
+      );
       await credential.user?.reload();
       _currentUser = _toLocalUser(_firebaseAuth.currentUser);
       return AuthResult.success(_currentUser!);
@@ -99,6 +105,39 @@ class FirebaseAuthService implements AuthService {
     } on FirebaseAuthException catch (error) {
       return AuthResult.failure(_message(error));
     }
+  }
+
+  @override
+  Future<void> deleteAccount({required String password}) async {
+    final user = _firebaseAuth.currentUser;
+    final email = user?.email;
+    if (user == null || email == null) {
+      throw StateError('No signed-in Firebase account was found.');
+    }
+
+    final credential = EmailAuthProvider.credential(
+      email: email,
+      password: password,
+    );
+    await user.reauthenticateWithCredential(credential);
+
+    final db = FirebaseFirestore.instance;
+    final reports = db
+        .collection('incident_reports')
+        .where('reporterUid', isEqualTo: user.uid);
+    while (true) {
+      final page = await reports.limit(400).get();
+      if (page.docs.isEmpty) break;
+      final batch = db.batch();
+      for (final document in page.docs) {
+        batch.delete(document.reference);
+      }
+      await batch.commit();
+    }
+
+    await db.collection('users').doc(user.uid).delete();
+    await user.delete();
+    _currentUser = null;
   }
 
   @override

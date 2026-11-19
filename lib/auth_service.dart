@@ -39,6 +39,8 @@ abstract interface class AuthService {
     required String newPassword,
   });
 
+  Future<void> deleteAccount({required String password});
+
   Future<void> signOut();
 }
 
@@ -65,8 +67,7 @@ class LocalAuthService implements AuthService {
     final stored = _preferences.getString(_accountsKey);
     if (stored == null || stored.isEmpty) return [];
     try {
-      return (jsonDecode(stored) as List<dynamic>)
-          .cast<Map<String, dynamic>>();
+      return (jsonDecode(stored) as List<dynamic>).cast<Map<String, dynamic>>();
     } catch (_) {
       return [];
     }
@@ -111,7 +112,8 @@ class LocalAuthService implements AuthService {
     final normalizedEmail = email.trim().toLowerCase();
     final accounts = _loadAccounts();
     if (accounts.any((account) => account['email'] == normalizedEmail)) {
-      return const AuthResult.failure('An account with that email already exists.');
+      return const AuthResult.failure(
+          'An account with that email already exists.');
     }
 
     final passwordSalt = _newSalt();
@@ -177,6 +179,32 @@ class LocalAuthService implements AuthService {
       );
     }
     return const AuthResult.failure('No account was found for that email.');
+  }
+
+  @override
+  Future<void> deleteAccount({required String password}) async {
+    final user = _currentUser;
+    if (user == null) {
+      throw StateError('No signed-in account was found.');
+    }
+
+    final accounts = _loadAccounts();
+    final accountIndex =
+        accounts.indexWhere((account) => account['email'] == user.email);
+    if (accountIndex < 0) {
+      throw StateError('The signed-in account could not be found.');
+    }
+
+    final account = accounts[accountIndex];
+    if (_hash(password, account['passwordSalt'] as String) !=
+        account['passwordHash']) {
+      throw StateError('The password is incorrect.');
+    }
+
+    accounts.removeAt(accountIndex);
+    await _saveAccounts(accounts);
+    await _preferences.remove(_sessionKey);
+    _currentUser = null;
   }
 
   @override

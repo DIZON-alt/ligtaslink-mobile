@@ -1,7 +1,17 @@
+import 'dart:async';
+
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'auth_service.dart';
+import 'disaster_alerts.dart';
+import 'disaster_push_service.dart';
+import 'firebase_auth_service.dart';
+import 'incident_reports_api.dart';
 import 'login_page.dart';
+import 'profile_api.dart';
 import 'services_api.dart';
 import 'services_page.dart';
 
@@ -253,16 +263,170 @@ class _HomePageState extends State<HomePage> {
       defaultValue: '',
     ),
   );
+  static final _disasterAlertsApi = DisasterAlertsApi();
+  static const _notificationsEnabledKey = 'ligtaslink_push_enabled_v1';
+  static const _earthquakePushEnabledKey = 'ligtaslink_earthquake_push_v1';
+  static const _typhoonPushEnabledKey = 'ligtaslink_typhoon_push_v1';
+  final _pushService = DisasterPushService();
   int _selectedIndex = 0;
   int _requestCount = 0;
-  bool _notificationsEnabled = true;
+  bool _notificationsEnabled = false;
+  bool _earthquakePushEnabled = true;
+  bool _typhoonPushEnabled = true;
   bool _locationEnabled = true;
+  bool _alertsLoading = true;
+  DisasterAlertsSnapshot? _disasterAlerts;
+  Timer? _alertsRefreshTimer;
+  StreamSubscription<RemoteMessage>? _foregroundMessageSubscription;
+  StreamSubscription<RemoteMessage>? _openedMessageSubscription;
+  final List<RemoteMessage> _foregroundAlerts = [];
   final List<CommunityMessage> _communityMessages = [
     ..._starterChatMessages,
   ];
   final List<CommunityPost> _communityPosts = [
     ..._starterCommunityPosts,
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshOfficialAlerts();
+    _initializePushNotifications();
+    _alertsRefreshTimer = Timer.periodic(
+      const Duration(minutes: 5),
+      (_) => _refreshOfficialAlerts(),
+    );
+    if (_pushService.isSupportedPlatform && _pushService.isConfigured) {
+      _foregroundMessageSubscription =
+          _pushService.foregroundMessages.listen(_handlePushMessage);
+      _openedMessageSubscription = _pushService.openedMessages.listen(
+        (_) => _selectDestination(2),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _alertsRefreshTimer?.cancel();
+    _foregroundMessageSubscription?.cancel();
+    _openedMessageSubscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refreshOfficialAlerts() async {
+    if (_disasterAlerts == null && mounted) {
+      setState(() => _alertsLoading = true);
+    }
+    final snapshot = await _disasterAlertsApi.fetch();
+    if (!mounted) return;
+    setState(() {
+      _disasterAlerts = snapshot;
+      _alertsLoading = false;
+    });
+  }
+
+  Future<void> _initializePushNotifications() async {
+    final preferences = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    final notificationsEnabled =
+        preferences.getBool(_notificationsEnabledKey) ?? false;
+    final earthquakesEnabled =
+        preferences.getBool(_earthquakePushEnabledKey) ?? true;
+    final typhoonsEnabled = preferences.getBool(_typhoonPushEnabledKey) ?? true;
+    setState(() {
+      _notificationsEnabled = notificationsEnabled;
+      _earthquakePushEnabled = earthquakesEnabled;
+      _typhoonPushEnabled = typhoonsEnabled;
+    });
+    if (notificationsEnabled && _pushService.isConfigured) {
+      try {
+        await _pushService.updateSubscriptions(
+          enabled: true,
+          earthquakes: earthquakesEnabled,
+          typhoons: typhoonsEnabled,
+        );
+      } catch (error) {
+        _showPushError(error);
+      }
+    }
+  }
+
+  void _handlePushMessage(RemoteMessage message) {
+    final title = message.notification?.title ??
+        message.data['title']?.toString() ??
+        'Disaster alert';
+    final body =
+        message.notification?.body ?? message.data['body']?.toString() ?? '';
+    setState(() {
+      _foregroundAlerts.insert(0, message);
+      if (_foregroundAlerts.length > 10) _foregroundAlerts.removeLast();
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text(body.isEmpty ? title : '$title: $body'),
+        action: SnackBarAction(
+          label: 'View',
+          onPressed: () => _selectDestination(2),
+        ),
+      ),
+    );
+  }
+
+  void _showPushError(Object error) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Push notification settings: $error')),
+    );
+  }
+
+  Future<void> _changeNotificationsEnabled(bool enabled) async {
+    try {
+      await _pushService.updateSubscriptions(
+        enabled: enabled,
+        earthquakes: _earthquakePushEnabled,
+        typhoons: _typhoonPushEnabled,
+      );
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setBool(_notificationsEnabledKey, enabled);
+      if (mounted) setState(() => _notificationsEnabled = enabled);
+    } catch (error) {
+      _showPushError(error);
+    }
+  }
+
+  Future<void> _changeEarthquakePushEnabled(bool enabled) async {
+    try {
+      if (_notificationsEnabled) {
+        await _pushService.updateSubscriptions(
+          enabled: true,
+          earthquakes: enabled,
+          typhoons: _typhoonPushEnabled,
+        );
+      }
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setBool(_earthquakePushEnabledKey, enabled);
+      if (mounted) setState(() => _earthquakePushEnabled = enabled);
+    } catch (error) {
+      _showPushError(error);
+    }
+  }
+
+  Future<void> _changeTyphoonPushEnabled(bool enabled) async {
+    try {
+      if (_notificationsEnabled) {
+        await _pushService.updateSubscriptions(
+          enabled: true,
+          earthquakes: _earthquakePushEnabled,
+          typhoons: enabled,
+        );
+      }
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setBool(_typhoonPushEnabledKey, enabled);
+      if (mounted) setState(() => _typhoonPushEnabled = enabled);
+    } catch (error) {
+      _showPushError(error);
+    }
+  }
 
   String get _firstName {
     final trimmed = widget.user.name.trim();
@@ -273,6 +437,7 @@ class _HomePageState extends State<HomePage> {
   void _selectDestination(int index, {bool closeDrawer = false}) {
     if (closeDrawer) Navigator.of(context).pop();
     setState(() => _selectedIndex = index);
+    if (index == 2) _refreshOfficialAlerts();
   }
 
   Future<void> _signOut() async {
@@ -308,13 +473,93 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  void _recordRequest(
+  Future<void> _deleteAccount() async {
+    final passwordController = TextEditingController();
+    final password = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.delete_forever_outlined, color: _emergencyRed),
+        title: const Text('Delete account permanently?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              widget.auth is FirebaseAuthService
+                  ? 'Your account, profile, and Firestore incident reports will be deleted. This cannot be undone. Enter your password to confirm.'
+                  : 'Your local account and saved account data will be deleted. This cannot be undone. Enter your password to confirm.',
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: passwordController,
+              obscureText: true,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'Password'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _emergencyRed),
+            onPressed: () => Navigator.of(context).pop(passwordController.text),
+            child: const Text('Delete account'),
+          ),
+        ],
+      ),
+    );
+    passwordController.dispose();
+    if (password == null || password.isEmpty) return;
+
+    try {
+      await widget.auth.deleteAccount(password: password);
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => LoginPage(auth: widget.auth),
+        ),
+        (_) => false,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Account could not be deleted: $error')),
+      );
+    }
+  }
+
+  Future<String?> _recordRequest(
     String service,
     String area,
     String location,
     String details,
-  ) {
-    final referenceId = 'LL-${(_requestCount + 1).toString().padLeft(4, '0')}';
+  ) async {
+    String referenceId;
+    try {
+      if (widget.auth is FirebaseAuthService) {
+        final documentId = await IncidentReportsApi().createReport(
+          service: service,
+          area: area,
+          location: location,
+          details: details,
+        );
+        referenceId = 'LL-${documentId.substring(0, 8).toUpperCase()}';
+      } else {
+        referenceId = 'LL-${(_requestCount + 1).toString().padLeft(4, '0')}';
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Incident report could not be saved: $error')),
+        );
+      }
+      return null;
+    }
+
+    if (!mounted) return null;
     setState(() {
       _requestCount++;
       _communityMessages.insert(
@@ -334,15 +579,16 @@ class _HomePageState extends State<HomePage> {
     });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          '$referenceId was added to the National Alerts feed. This classroom prototype does not contact emergency services.',
-        ),
+        content: Text(widget.auth is FirebaseAuthService
+            ? '$referenceId was saved. This app does not contact emergency services.'
+            : '$referenceId was added to this session only. Sign in with Firebase to save reports across devices.'),
         action: SnackBarAction(
           label: 'View feed',
           onPressed: () => _selectDestination(2),
         ),
       ),
     );
+    return referenceId;
   }
 
   void _sendCommunityPost(String area, String text) {
@@ -403,9 +649,13 @@ class _HomePageState extends State<HomePage> {
         ),
         child: _QuickReportForm(
           initialService: initialService,
-          onSubmit: (service, area, location, details) {
-            Navigator.of(context).pop();
-            _recordRequest(service, area, location, details);
+          onSubmit: (service, area, location, details) async {
+            final referenceId =
+                await _recordRequest(service, area, location, details);
+            if (referenceId != null && context.mounted) {
+              Navigator.of(context).pop();
+            }
+            return referenceId;
           },
         ),
       ),
@@ -435,20 +685,32 @@ class _HomePageState extends State<HomePage> {
           messages: _communityMessages,
           communityPosts: _communityPosts,
           onSendPost: _sendCommunityPost,
+          disasterAlerts: _disasterAlerts,
+          alertsLoading: _alertsLoading,
+          foregroundAlerts: _foregroundAlerts,
+          onRefreshAlerts: _refreshOfficialAlerts,
         );
       case 3:
         return _IncidentReportScreen(onSubmit: _recordRequest);
       case 4:
         return const _EmergencyContactsScreen();
       case 5:
-        return _ProfileScreen(user: widget.user);
+        return _ProfileScreen(
+          user: widget.user,
+          firestoreEnabled: widget.auth is FirebaseAuthService,
+          onDeleteAccount: _deleteAccount,
+        );
       case 6:
         return _SettingsScreen(
           notificationsEnabled: _notificationsEnabled,
+          earthquakePushEnabled: _earthquakePushEnabled,
+          typhoonPushEnabled: _typhoonPushEnabled,
+          pushConfigured:
+              _pushService.isSupportedPlatform && _pushService.isConfigured,
+          onNotificationsChanged: _changeNotificationsEnabled,
+          onEarthquakePushChanged: _changeEarthquakePushEnabled,
+          onTyphoonPushChanged: _changeTyphoonPushEnabled,
           locationEnabled: _locationEnabled,
-          onNotificationsChanged: (value) {
-            setState(() => _notificationsEnabled = value);
-          },
           onLocationChanged: (value) {
             setState(() => _locationEnabled = value);
           },
@@ -946,7 +1208,7 @@ class _ServiceCard extends StatelessWidget {
 
 class _QuickReportForm extends StatefulWidget {
   final String? initialService;
-  final void Function(
+  final Future<String?> Function(
     String service,
     String area,
     String location,
@@ -968,6 +1230,7 @@ class _QuickReportFormState extends State<_QuickReportForm> {
   final _detailsController = TextEditingController();
   late String _service;
   String _area = 'Panacan';
+  bool _isSubmitting = false;
 
   @override
   void initState() {
@@ -1081,17 +1344,34 @@ class _QuickReportFormState extends State<_QuickReportForm> {
                 backgroundColor: _emergencyRed,
                 minimumSize: const Size.fromHeight(50),
               ),
-              onPressed: () {
-                if (!(_formKey.currentState?.validate() ?? false)) return;
-                widget.onSubmit(
-                  _service,
-                  _area,
-                  _locationController.text.trim(),
-                  _detailsController.text.trim(),
-                );
-              },
-              icon: const Icon(Icons.send),
-              label: const Text('Submit emergency report'),
+              onPressed: _isSubmitting
+                  ? null
+                  : () async {
+                      if (!(_formKey.currentState?.validate() ?? false)) {
+                        return;
+                      }
+                      setState(() => _isSubmitting = true);
+                      final referenceId = await widget.onSubmit(
+                        _service,
+                        _area,
+                        _locationController.text.trim(),
+                        _detailsController.text.trim(),
+                      );
+                      if (!mounted) return;
+                      if (referenceId == null) {
+                        setState(() => _isSubmitting = false);
+                      }
+                    },
+              icon: _isSubmitting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.send),
+              label: Text(
+                _isSubmitting ? 'Saving report…' : 'Submit emergency report',
+              ),
             ),
           ],
         ),
@@ -1608,12 +1888,20 @@ class _NationalAlertsScreen extends StatefulWidget {
   final List<CommunityMessage> messages;
   final List<CommunityPost> communityPosts;
   final void Function(String area, String text) onSendPost;
+  final DisasterAlertsSnapshot? disasterAlerts;
+  final bool alertsLoading;
+  final List<RemoteMessage> foregroundAlerts;
+  final Future<void> Function() onRefreshAlerts;
 
   const _NationalAlertsScreen({
     required this.currentUser,
     required this.messages,
     required this.communityPosts,
     required this.onSendPost,
+    required this.disasterAlerts,
+    required this.alertsLoading,
+    required this.foregroundAlerts,
+    required this.onRefreshAlerts,
   });
 
   @override
@@ -1786,18 +2074,38 @@ class _NationalAlertsScreenState extends State<_NationalAlertsScreen> {
   }
 
   Widget _buildNotifications(List<CommunityMessage> notifications) {
-    if (notifications.isEmpty) return const _EmptyNotificationState();
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(14, 16, 14, 28),
-      itemCount: notifications.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 12),
-      itemBuilder: (context, index) {
-        final notification = notifications[index];
-        return _NationalAlertCard(
-          notification: notification,
-          isMine: notification.senderEmail == widget.currentUser.email,
-        );
-      },
+    return RefreshIndicator(
+      onRefresh: widget.onRefreshAlerts,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(14, 16, 14, 28),
+        children: [
+          _OfficialDisasterAlertsPanel(
+            snapshot: widget.disasterAlerts,
+            loading: widget.alertsLoading,
+            foregroundAlerts: widget.foregroundAlerts,
+          ),
+          const SizedBox(height: 12),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(4, 8, 4, 4),
+            child: Text(
+              'Community reports',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+            ),
+          ),
+          if (notifications.isEmpty)
+            const _EmptyNotificationState()
+          else
+            ...notifications.map(
+              (notification) => Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: _NationalAlertCard(
+                  notification: notification,
+                  isMine: notification.senderEmail == widget.currentUser.email,
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -2012,6 +2320,494 @@ class _NationalAlertsScreenState extends State<_NationalAlertsScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _OfficialDisasterAlertsPanel extends StatefulWidget {
+  final DisasterAlertsSnapshot? snapshot;
+  final bool loading;
+  final List<RemoteMessage> foregroundAlerts;
+
+  const _OfficialDisasterAlertsPanel({
+    required this.snapshot,
+    required this.loading,
+    required this.foregroundAlerts,
+  });
+
+  @override
+  State<_OfficialDisasterAlertsPanel> createState() =>
+      _OfficialDisasterAlertsPanelState();
+}
+
+class _OfficialDisasterAlertsPanelState
+    extends State<_OfficialDisasterAlertsPanel> {
+  int _selectedHazard = 0;
+
+  Future<void> _openSource(BuildContext context, Uri url) async {
+    try {
+      final opened = await launchUrl(url, mode: LaunchMode.externalApplication);
+      if (!opened && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not open the official source.')),
+        );
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open the official source: $error')),
+        );
+      }
+    }
+  }
+
+  Color _magnitudeColor(double magnitude) {
+    if (magnitude >= 6) return const Color(0xFFFF8A65);
+    if (magnitude >= 5) return const Color(0xFFFFD166);
+    if (magnitude >= 4) return const Color(0xFF91F27A);
+    return const Color(0xFF72EBD2);
+  }
+
+  Widget _buildTabs() {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE9EAEC),
+        borderRadius: BorderRadius.circular(24),
+      ),
+      child: Row(
+        children: [
+          _hazardTab('Hazards', 0),
+          _hazardTab('Earthquake', 1),
+        ],
+      ),
+    );
+  }
+
+  Widget _hazardTab(String label, int index) {
+    final selected = _selectedHazard == index;
+    return Expanded(
+      child: Semantics(
+        selected: selected,
+        button: true,
+        child: GestureDetector(
+          onTap: () => setState(() => _selectedHazard = index),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 12),
+            decoration: BoxDecoration(
+              color: selected ? _trustBlue : Colors.transparent,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              label,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: selected ? Colors.white : const Color(0xFF263238),
+                fontSize: 13,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSectionHeader({
+    required IconData icon,
+    required String title,
+    Color color = const Color(0xFFFFB74D),
+  }) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(2, 1, 2, 10),
+      child: Row(
+        children: [
+          Icon(icon, size: 19, color: color),
+          const SizedBox(width: 8),
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF292D32),
+            ),
+          ),
+          const Spacer(),
+          if (widget.loading)
+            const SizedBox.square(
+              dimension: 15,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusCard({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    Color iconColor = const Color(0xFFFFA726),
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 19, color: iconColor),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    height: 1.35,
+                    color: Color(0xFF666C72),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEarthquakeWarnings() {
+    final snapshot = widget.snapshot;
+    if (snapshot == null) {
+      return _buildStatusCard(
+        icon: widget.loading ? Icons.hourglass_top : Icons.cloud_off_outlined,
+        title: widget.loading
+            ? 'Loading PHIVOLCS earthquake warnings'
+            : 'PHIVOLCS earthquake feed unavailable',
+        subtitle: widget.loading
+            ? 'Checking the latest official information.'
+            : 'Pull down to try again.',
+      );
+    }
+    if (snapshot.earthquakeError case final error?) {
+      return _buildStatusCard(
+        icon: Icons.error_outline,
+        title: 'PHIVOLCS earthquake feed unavailable',
+        subtitle: error,
+      );
+    }
+    if (snapshot.earthquakes.isEmpty) {
+      return _buildStatusCard(
+        icon: Icons.check_circle_outline,
+        title: 'No earthquake records available',
+        subtitle: 'Check the official PHIVOLCS page for updates.',
+      );
+    }
+
+    return Column(
+      children: snapshot.earthquakes.map((alert) {
+        final magnitude = double.tryParse(alert.magnitude) ?? 0;
+        return Material(
+          color: Colors.white,
+          child: InkWell(
+            onTap: () => _openSource(context, alert.sourceUrl),
+            borderRadius: BorderRadius.circular(10),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 9),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Container(
+                    width: 54,
+                    constraints: const BoxConstraints(minHeight: 47),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 4,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _magnitudeColor(magnitude),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          alert.magnitude,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            height: 1.1,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF18202B),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        const Text(
+                          'Magnitude',
+                          style: TextStyle(
+                            fontSize: 8,
+                            color: Color(0xFF263238),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 11),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          alert.timeLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xFF777D83),
+                            fontSize: 10,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          alert.location,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xFF25292E),
+                            fontSize: 12,
+                            height: 1.2,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          alert.details,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xFF1474C8),
+                            fontSize: 9,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _buildHazards() {
+    final snapshot = widget.snapshot;
+    if (snapshot == null) {
+      return _buildStatusCard(
+        icon: widget.loading ? Icons.hourglass_top : Icons.cloud_off_outlined,
+        title: widget.loading
+            ? 'Loading PAGASA hazard bulletins'
+            : 'PAGASA hazard feed unavailable',
+        subtitle: widget.loading
+            ? 'Checking the latest official information.'
+            : 'Pull down to try again.',
+      );
+    }
+    if (snapshot.typhoonError case final error?) {
+      return _buildStatusCard(
+        icon: Icons.error_outline,
+        title: 'PAGASA typhoon bulletin unavailable',
+        subtitle: error,
+      );
+    }
+    if (snapshot.typhoon case final alert?) {
+      return Material(
+        color: Colors.white,
+        child: InkWell(
+          onTap: () => _openSource(context, alert.sourceUrl),
+          borderRadius: BorderRadius.circular(10),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const CircleAvatar(
+                  radius: 22,
+                  backgroundColor: Color(0xFFFFE7D7),
+                  child: Icon(Icons.storm, color: Color(0xFFE65100)),
+                ),
+                const SizedBox(width: 11),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        alert.title,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      Text(
+                        alert.details,
+                        maxLines: 5,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          height: 1.3,
+                          color: Color(0xFF555B61),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Open official PAGASA bulletin',
+                        style: TextStyle(
+                          color: Color(0xFF1474C8),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.open_in_new, size: 17, color: Colors.black45),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    return _buildStatusCard(
+      icon: Icons.check_circle_outline,
+      title: 'No active PAGASA typhoon bulletin',
+      subtitle:
+          'The latest official bulletin reports no active tropical cyclone in the Philippine Area of Responsibility.',
+      iconColor: _successGreen,
+    );
+  }
+
+  String _messageTitle(RemoteMessage message) {
+    return message.notification?.title ??
+        message.data['title']?.toString() ??
+        'Disaster alert';
+  }
+
+  String _messageBody(RemoteMessage message) {
+    return message.notification?.body ?? message.data['body']?.toString() ?? '';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildTabs(),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF0F1F2),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Column(
+            children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(10, 10, 10, 4),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _buildSectionHeader(
+                      icon: _selectedHazard == 0
+                          ? Icons.warning_amber_rounded
+                          : Icons.info_outline,
+                      title: _selectedHazard == 0
+                          ? 'Hazard warnings'
+                          : 'Earthquake warnings',
+                    ),
+                    _selectedHazard == 0
+                        ? _buildHazards()
+                        : _buildEarthquakeWarnings(),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Wrap(
+                  spacing: 4,
+                  children: [
+                    TextButton(
+                      onPressed: () => _openSource(
+                        context,
+                        Uri.parse(phivolcsEarthquakeUrl),
+                      ),
+                      child: const Text('PHIVOLCS'),
+                    ),
+                    TextButton(
+                      onPressed: () => _openSource(
+                        context,
+                        Uri.parse(pagasaCycloneBulletinUrl),
+                      ),
+                      child: const Text('PAGASA'),
+                    ),
+                  ],
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(8, 0, 8, 7),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Live feed refreshes every 5 minutes while the app is open. Follow official agency instructions.',
+                    style: TextStyle(fontSize: 10, color: Color(0xFF646A70)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (widget.foregroundAlerts.isNotEmpty) ...[
+          const Padding(
+            padding: EdgeInsets.fromLTRB(4, 14, 4, 4),
+            child: Text(
+              'Push alerts received',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+            ),
+          ),
+          ...widget.foregroundAlerts.map(
+            (message) => Card(
+              child: ListTile(
+                leading: const Icon(
+                  Icons.notifications_active,
+                  color: _trustBlue,
+                ),
+                title: Text(_messageTitle(message)),
+                subtitle: Text(_messageBody(message)),
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -2385,7 +3181,7 @@ class _EmptyNotificationState extends StatelessWidget {
 }
 
 class _IncidentReportScreen extends StatefulWidget {
-  final void Function(
+  final Future<String?> Function(
     String service,
     String area,
     String location,
@@ -2404,6 +3200,7 @@ class _IncidentReportScreenState extends State<_IncidentReportScreen> {
   final _detailsController = TextEditingController();
   String _service = _services.first.name;
   String _area = 'Panacan';
+  bool _isSubmitting = false;
 
   @override
   void dispose() {
@@ -2412,14 +3209,18 @@ class _IncidentReportScreenState extends State<_IncidentReportScreen> {
     super.dispose();
   }
 
-  void _submit() {
+  Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    widget.onSubmit(
+    setState(() => _isSubmitting = true);
+    final referenceId = await widget.onSubmit(
       _service,
       _area,
       _locationController.text.trim(),
       _detailsController.text.trim(),
     );
+    if (!mounted) return;
+    setState(() => _isSubmitting = false);
+    if (referenceId == null) return;
     _locationController.clear();
     _detailsController.clear();
     setState(() {});
@@ -2525,9 +3326,19 @@ class _IncidentReportScreenState extends State<_IncidentReportScreen> {
                         minimumSize: const Size.fromHeight(50),
                         backgroundColor: _emergencyRed,
                       ),
-                      onPressed: _submit,
-                      icon: const Icon(Icons.send),
-                      label: const Text('Submit incident report'),
+                      onPressed: _isSubmitting ? null : _submit,
+                      icon: _isSubmitting
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.send),
+                      label: Text(
+                        _isSubmitting
+                            ? 'Saving report…'
+                            : 'Submit incident report',
+                      ),
                     ),
                   ],
                 ),
@@ -2766,10 +3577,84 @@ class _SafetyAlertsScreen extends StatelessWidget {
   }
 }
 
-class _ProfileScreen extends StatelessWidget {
+class _ProfileScreen extends StatefulWidget {
   final LocalUser user;
+  final bool firestoreEnabled;
+  final Future<void> Function() onDeleteAccount;
 
-  const _ProfileScreen({required this.user});
+  const _ProfileScreen({
+    required this.user,
+    required this.firestoreEnabled,
+    required this.onDeleteAccount,
+  });
+
+  @override
+  State<_ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<_ProfileScreen> {
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _addressController = TextEditingController();
+  final TextEditingController _phoneController = TextEditingController();
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  Future<void> _loadProfile() async {
+    if (!widget.firestoreEnabled) {
+      _nameController.text = widget.user.name;
+      setState(() => _loading = false);
+      return;
+    }
+
+    try {
+      final profile = await ApiService.getCurrentUserProfile();
+      if (!mounted) return;
+      _nameController.text = profile?.name ?? widget.user.name;
+      _addressController.text = profile?.address ?? '';
+      _phoneController.text = profile?.phoneNumber ?? '';
+      setState(() => _loading = false);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  Future<void> _editProfile() async {
+    final profile = await Navigator.of(context).push<UserProfile>(
+      MaterialPageRoute(
+        builder: (_) => _EditProfileScreen(
+          name: _nameController.text,
+          email: widget.user.email,
+          address: _addressController.text,
+          phoneNumber: _phoneController.text,
+        ),
+      ),
+    );
+    if (profile == null || !mounted) return;
+    setState(() {
+      _nameController.text = profile.name;
+      _addressController.text = profile.address;
+      _phoneController.text = profile.phoneNumber;
+      _error = null;
+    });
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _addressController.dispose();
+    _phoneController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2780,7 +3665,9 @@ class _ProfileScreen extends StatelessWidget {
             radius: 48,
             backgroundColor: Theme.of(context).colorScheme.primaryContainer,
             child: Text(
-              user.name.isEmpty ? '?' : user.name[0].toUpperCase(),
+              _nameController.text.isEmpty
+                  ? '?'
+                  : _nameController.text[0].toUpperCase(),
               style: TextStyle(
                 color: Theme.of(context).colorScheme.onPrimaryContainer,
                 fontSize: 38,
@@ -2790,37 +3677,92 @@ class _ProfileScreen extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           Text(
-            user.name,
+            _nameController.text,
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                   fontWeight: FontWeight.bold,
                 ),
           ),
           const SizedBox(height: 4),
-          Text(user.email, style: TextStyle(color: Colors.grey[600])),
+          Text(widget.user.email, style: TextStyle(color: Colors.grey[600])),
           const SizedBox(height: 20),
-          Card(
-            child: Column(
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.person_outline),
-                  title: const Text('Full name'),
-                  subtitle: Text(user.name),
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.email_outlined),
-                  title: const Text('Email address'),
-                  subtitle: Text(user.email),
-                ),
-                const Divider(height: 1),
-                const ListTile(
-                  leading: Icon(Icons.verified_user_outlined),
-                  title: Text('Account status'),
-                  subtitle: Text('Verified member'),
-                ),
-              ],
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                _error!,
+                style: const TextStyle(color: Colors.red),
+              ),
             ),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : Column(
+                      children: [
+                        ListTile(
+                          leading: const Icon(Icons.person_outline),
+                          title: const Text('Full name'),
+                          subtitle: Text(_nameController.text),
+                        ),
+                        if (_addressController.text.isNotEmpty) ...[
+                          const Divider(height: 1),
+                          ListTile(
+                            leading: const Icon(Icons.home_outlined),
+                            title: const Text('Address'),
+                            subtitle: Text(_addressController.text),
+                          ),
+                        ],
+                        if (_phoneController.text.isNotEmpty) ...[
+                          const Divider(height: 1),
+                          ListTile(
+                            leading: const Icon(Icons.phone_outlined),
+                            title: const Text('Phone number'),
+                            subtitle: Text(_phoneController.text),
+                          ),
+                        ],
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: const Icon(Icons.email_outlined),
+                          title: const Text('Email address'),
+                          subtitle: Text(widget.user.email),
+                        ),
+                        const ListTile(
+                          leading: Icon(Icons.verified_user_outlined),
+                          title: Text('Account status'),
+                          subtitle: Text('Verified member'),
+                        ),
+                      ],
+                    ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (widget.firestoreEnabled) ...[
+            FilledButton.icon(
+              onPressed: _loading || _error != null ? null : _editProfile,
+              icon: const Icon(Icons.edit_outlined),
+              label: const Text('Edit profile'),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const _MyIncidentReportsScreen(),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.assignment_outlined),
+              label: const Text('My incident reports'),
+            ),
+          ],
+          const SizedBox(height: 12),
+          TextButton.icon(
+            onPressed: widget.onDeleteAccount,
+            style: TextButton.styleFrom(foregroundColor: _emergencyRed),
+            icon: const Icon(Icons.delete_forever_outlined),
+            label: const Text('Delete account'),
           ),
         ],
       ),
@@ -2828,17 +3770,227 @@ class _ProfileScreen extends StatelessWidget {
   }
 }
 
+class _EditProfileScreen extends StatefulWidget {
+  final String name;
+  final String email;
+  final String address;
+  final String phoneNumber;
+
+  const _EditProfileScreen({
+    required this.name,
+    required this.email,
+    required this.address,
+    required this.phoneNumber,
+  });
+
+  @override
+  State<_EditProfileScreen> createState() => _EditProfileScreenState();
+}
+
+class _EditProfileScreenState extends State<_EditProfileScreen> {
+  final _formKey = GlobalKey<FormState>();
+  late final _nameController = TextEditingController(text: widget.name);
+  late final _addressController = TextEditingController(text: widget.address);
+  late final _phoneController = TextEditingController(text: widget.phoneNumber);
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _addressController.dispose();
+    _phoneController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    setState(() => _saving = true);
+    try {
+      await ApiService.saveProfile(
+        name: _nameController.text.trim(),
+        email: widget.email,
+        address: _addressController.text.trim(),
+        phoneNumber: _phoneController.text.trim(),
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(
+        UserProfile(
+          uid: '',
+          name: _nameController.text.trim(),
+          email: widget.email,
+          address: _addressController.text.trim(),
+          phoneNumber: _phoneController.text.trim(),
+          updatedAt: DateTime.now(),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not save profile: $error')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Edit profile')),
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: Form(
+              key: _formKey,
+              child: ListView(
+                padding: const EdgeInsets.all(20),
+                children: [
+                  TextFormField(
+                    controller: _nameController,
+                    textCapitalization: TextCapitalization.words,
+                    decoration: const InputDecoration(
+                      labelText: 'Full name',
+                      prefixIcon: Icon(Icons.person_outline),
+                    ),
+                    validator: (value) => value?.trim().isEmpty ?? true
+                        ? 'Enter your name'
+                        : null,
+                  ),
+                  const SizedBox(height: 14),
+                  TextFormField(
+                    initialValue: widget.email,
+                    readOnly: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Email address',
+                      prefixIcon: Icon(Icons.email_outlined),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  TextFormField(
+                    controller: _addressController,
+                    textCapitalization: TextCapitalization.words,
+                    decoration: const InputDecoration(
+                      labelText: 'Address',
+                      prefixIcon: Icon(Icons.home_outlined),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  TextFormField(
+                    controller: _phoneController,
+                    keyboardType: TextInputType.phone,
+                    decoration: const InputDecoration(
+                      labelText: 'Phone number',
+                      prefixIcon: Icon(Icons.phone_outlined),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  FilledButton.icon(
+                    onPressed: _saving ? null : _save,
+                    icon: _saving
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.save_outlined),
+                    label: Text(_saving ? 'Saving…' : 'Save changes'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MyIncidentReportsScreen extends StatefulWidget {
+  const _MyIncidentReportsScreen();
+
+  @override
+  State<_MyIncidentReportsScreen> createState() =>
+      _MyIncidentReportsScreenState();
+}
+
+class _MyIncidentReportsScreenState extends State<_MyIncidentReportsScreen> {
+  late final Future<List<Map<String, dynamic>>> _reports =
+      IncidentReportsApi().getMyReports();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('My incident reports')),
+      body: FutureBuilder<List<Map<String, dynamic>>>(
+        future: _reports,
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text('Could not load reports: ${snapshot.error}'),
+              ),
+            );
+          }
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final reports = snapshot.data!;
+          if (reports.isEmpty) {
+            return const Center(child: Text('You have no saved reports yet.'));
+          }
+          return ListView.separated(
+            padding: const EdgeInsets.all(16),
+            itemCount: reports.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 10),
+            itemBuilder: (context, index) {
+              final report = reports[index];
+              return Card(
+                child: ListTile(
+                  leading: const Icon(
+                    Icons.emergency_outlined,
+                    color: _emergencyRed,
+                  ),
+                  title: Text(
+                    report['service']?.toString() ?? 'Incident report',
+                  ),
+                  subtitle: Text(
+                    '${report['area'] ?? ''} • ${report['location'] ?? ''}\n'
+                    '${report['status'] ?? 'Pending verification'}\n'
+                    '${report['details'] ?? ''}',
+                  ),
+                  isThreeLine: true,
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
 class _SettingsScreen extends StatelessWidget {
   final bool notificationsEnabled;
+  final bool earthquakePushEnabled;
+  final bool typhoonPushEnabled;
+  final bool pushConfigured;
   final bool locationEnabled;
-  final ValueChanged<bool> onNotificationsChanged;
+  final Future<void> Function(bool) onNotificationsChanged;
+  final Future<void> Function(bool) onEarthquakePushChanged;
+  final Future<void> Function(bool) onTyphoonPushChanged;
   final ValueChanged<bool> onLocationChanged;
   final Future<void> Function() onSignOut;
 
   const _SettingsScreen({
     required this.notificationsEnabled,
-    required this.locationEnabled,
+    required this.earthquakePushEnabled,
+    required this.typhoonPushEnabled,
+    required this.pushConfigured,
     required this.onNotificationsChanged,
+    required this.onEarthquakePushChanged,
+    required this.onTyphoonPushChanged,
+    required this.locationEnabled,
     required this.onLocationChanged,
     required this.onSignOut,
   });
@@ -2859,10 +4011,32 @@ class _SettingsScreen extends StatelessWidget {
               children: [
                 SwitchListTile(
                   secondary: const Icon(Icons.notifications_active_outlined),
-                  title: const Text('Safety notifications'),
-                  subtitle: const Text('Receive emergency and safety alerts'),
+                  title: const Text('Disaster push notifications'),
+                  subtitle: Text(
+                    pushConfigured
+                        ? 'Receive official alerts when the app is closed'
+                        : 'Configure Firebase and deploy the alert function to enable push',
+                  ),
                   value: notificationsEnabled,
                   onChanged: onNotificationsChanged,
+                ),
+                const Divider(height: 1),
+                SwitchListTile(
+                  secondary: const Icon(Icons.sensors_outlined),
+                  title: const Text('Earthquake alerts'),
+                  subtitle:
+                      const Text('PHIVOLCS events of magnitude 4.0 or higher'),
+                  value: earthquakePushEnabled,
+                  onChanged:
+                      notificationsEnabled ? onEarthquakePushChanged : null,
+                ),
+                const Divider(height: 1),
+                SwitchListTile(
+                  secondary: const Icon(Icons.storm_outlined),
+                  title: const Text('Typhoon alerts'),
+                  subtitle: const Text('New PAGASA tropical cyclone bulletins'),
+                  value: typhoonPushEnabled,
+                  onChanged: notificationsEnabled ? onTyphoonPushChanged : null,
                 ),
                 const Divider(height: 1),
                 SwitchListTile(
